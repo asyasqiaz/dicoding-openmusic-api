@@ -23,7 +23,7 @@ class AuthenticationsHandler {
 
     const response = h.response({
       status: 'success',
-      message: 'Authentication successfully added',
+      message: 'Authentication added successfully',
       data: {
         accessToken,
         refreshToken,
