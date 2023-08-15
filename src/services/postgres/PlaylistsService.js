@@ -5,8 +5,9 @@ const NotFoundError = require('../../exceptions/NotFoundError');
 const AuthorizationError = require('../../exceptions/AuthorizationError');
 
 class PlaylistsService {
-  constructor() {
+  constructor(collaborationsService) {
     this._pool = new Pool();
+    this._collaborationService = collaborationsService;
   }
 
   async addPlaylist({ name, owner }) {
@@ -26,9 +27,10 @@ class PlaylistsService {
     return result.rows[0].id;
   }
 
-  async getPlaylists() {
+  async getPlaylists(owner) {
     const query = {
-      text: 'SELECT playlists.id, playlists.name, users.username FROM playlists LEFT JOIN users ON playlists.owner = users.id',
+      text: 'SELECT playlists.id, playlists.name, users.username FROM playlists INNER JOIN users ON playlists.owner = users.id LEFT JOIN collaborations ON collaborations.playlist_id = playlists.id WHERE playlists.owner = $1 OR collaborations.user_id = $1',
+      values: [owner],
     };
 
     const result = await this._pool.query(query);
@@ -48,12 +50,12 @@ class PlaylistsService {
     }
   }
 
-  async addSongToPlaylist(playlist_id, song_id) {
+  async addSongToPlaylist(playlistId, songId) {
     const id = `playlistsong-${nanoid(16)}`;
 
     const query = {
       text: 'INSERT INTO playlist_songs VALUES($1, $2, $3) RETURNING id',
-      values: [id, playlist_id, song_id],
+      values: [id, playlistId, songId],
     };
 
     const result = await this._pool.query(query);
@@ -86,10 +88,10 @@ class PlaylistsService {
     };
   }
 
-  async deleteSongFromPlaylist(playlist_id, song_id) {
+  async deleteSongFromPlaylist(playlistId, songId) {
     const query = {
       text: 'DELETE FROM playlist_songs WHERE playlist_id = $1 AND song_id = $2 RETURNING id',
-      values: [playlist_id, song_id],
+      values: [playlistId, songId],
     };
 
     const result = await this._pool.query(query);
@@ -125,6 +127,56 @@ class PlaylistsService {
     if (!result.rowCount) {
       throw new NotFoundError('Failed to add song to playlist. Song id not found');
     }
+  }
+
+  async verifyPlaylistAccess(playlist_id, user_id) {
+    try {
+      await this.verifyPlaylistOwner(playlist_id, user_id);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw error;
+      }
+      try {
+        await this._collaborationService.verifyCollaborator(playlist_id, user_id);
+      } catch {
+        throw error;
+      }
+    }
+  }
+
+  async addPlaylistActivity(playlistId, songId, userId, action) {
+    const id = `playlist_activity-${nanoid(16)}`;
+    const time = new Date().toISOString();
+
+    const query = {
+      text: 'INSERT INTO playlist_song_activities VALUES($1, $2, $3, $4, $5, $6)',
+      values: [id, playlistId, songId, userId, action, time],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new InvariantError('Failed to add activity');
+    }
+  }
+
+  async getPlaylistActivities(playlistId) {
+    const query = {
+      text: `SELECT users.username, songs.title, playlist_song_activities.action, playlist_song_activities.time FROM playlist_song_activities
+      INNER JOIN users ON playlist_song_activities.user_id = users.id
+      LEFT JOIN collaborations ON collaborations.playlist_id = playlist_song_activities.playlist_id
+      LEFT JOIN songs ON songs.id = playlist_song_activities.song_id
+      WHERE playlist_song_activities.playlist_id = $1`,
+      values: [playlistId],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new NotFoundError('Activities history not found');
+    }
+
+    return result.rows;
   }
 }
 
