@@ -51,10 +51,13 @@ class AlbumsService {
       throw new NotFoundError('Album not found');
     }
 
-    return {
+    const album = {
       ...albumResult.rows[0],
+      coverUrl: albumResult.rows[0].cover,
       songs: songsResult.rows.map(mapSongDBToModel),
     };
+    delete album.cover;
+    return album;
   }
 
   async editAlbumById(id, { name, year }) {
@@ -81,6 +84,19 @@ class AlbumsService {
 
     if (!result.rowCount) {
       throw new NotFoundError('Failed to delete album. Id not found');
+    }
+  }
+
+  async updateAlbumCoverById(id, cover) {
+    const query = {
+      text: 'UPDATE albums SET cover = $1 WHERE id = $2',
+      values: [cover, id],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new NotFoundError('Failed to update album cover. ID not found');
     }
   }
 }
