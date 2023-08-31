@@ -3,6 +3,7 @@ const { nanoid } = require('nanoid');
 const InvariantError = require('../../exceptions/InvariantError');
 const { mapAlbumDBToModel, mapSongDBToModel } = require('../../utils');
 const NotFoundError = require('../../exceptions/NotFoundError');
+const ClientError = require('../../exceptions/ClientError');
 
 class AlbumsService {
   constructor() {
@@ -98,6 +99,79 @@ class AlbumsService {
     if (!result.rowCount) {
       throw new NotFoundError('Failed to update album cover. ID not found');
     }
+  }
+
+  async verifyAlbumAvailability(id) {
+    const query = {
+      text: 'SELECT * FROM albums WHERE id = $1',
+      values: [id],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new NotFoundError('Album id not found');
+    }
+  }
+
+  async addAlbumLikeById(userId, albumId) {
+    const id = `user-album-like-${nanoid(16)}`;
+    await this.getAlbumById(albumId);
+    const isLikeExist = await this.verifyAlbumLikeAvailability(userId, albumId);
+
+    if (isLikeExist) {
+      throw new ClientError('Album have been liked by user.');
+    }
+
+    const query = {
+      text: 'INSERT INTO user_album_likes(id, user_id, album_id) VALUES($1, $2, $3) RETURNING id',
+      values: [id, userId, albumId],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new InvariantError('Failed to add like to album');
+    }
+  }
+
+  async getAlbumLikesById(id) {
+    const query = {
+      text: 'SELECT COUNT(*)  AS count FROM user_album_likes WHERE album_id = $1',
+      values: [id],
+    };
+
+    const result = await this._pool.query(query);
+
+    return result.rows[0].count;
+  }
+
+  async deleteAlbumLikeById(userId, albumId) {
+    const query = {
+      text: 'DELETE FROM user_album_likes WHERE user_id = $1 AND album_id = $2 RETURNING id',
+      values: [userId, albumId],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new InvariantError('Failed to delete like');
+    }
+  }
+
+  async verifyAlbumLikeAvailability(userId, albumId) {
+    const query = {
+      text: 'SELECT * FROM user_album_likes WHERE user_id = $1 AND album_id = $2',
+      values: [userId, albumId],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      return false;
+    }
+
+    return true;
   }
 }
 
