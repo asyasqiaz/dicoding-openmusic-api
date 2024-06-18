@@ -3,10 +3,12 @@ const { nanoid } = require('nanoid');
 const InvariantError = require('../../exceptions/InvariantError');
 const { mapAlbumDBToModel, mapSongDBToModel } = require('../../utils');
 const NotFoundError = require('../../exceptions/NotFoundError');
+const ClientError = require('../../exceptions/ClientError');
 
 class AlbumsService {
-  constructor() {
+  constructor(cacheService) {
     this._pool = new Pool();
+    this._cacheService = cacheService;
   }
 
   async addAlbum({ name, year }) {
@@ -47,14 +49,17 @@ class AlbumsService {
 
     const songsResult = await this._pool.query(songsQuery);
 
-    if (!albumResult.rows.length) {
+    if (!albumResult.rowCount) {
       throw new NotFoundError('Album not found');
     }
 
-    return {
+    const album = {
       ...albumResult.rows[0],
+      coverUrl: albumResult.rows[0].cover,
       songs: songsResult.rows.map(mapSongDBToModel),
     };
+    delete album.cover;
+    return album;
   }
 
   async editAlbumById(id, { name, year }) {
@@ -66,7 +71,7 @@ class AlbumsService {
 
     const result = await this._pool.query(query);
 
-    if (!result.rows.length) {
+    if (!result.rowCount) {
       throw new NotFoundError('Failed to update album. ID not found');
     }
   }
@@ -79,9 +84,114 @@ class AlbumsService {
 
     const result = await this._pool.query(query);
 
-    if (!result.rows.length) {
+    if (!result.rowCount) {
       throw new NotFoundError('Failed to delete album. Id not found');
     }
+  }
+
+  async updateAlbumCoverById(id, cover) {
+    const query = {
+      text: 'UPDATE albums SET cover = $1 WHERE id = $2',
+      values: [cover, id],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new NotFoundError('Failed to update album cover. ID not found');
+    }
+  }
+
+  async verifyAlbumAvailability(id) {
+    const query = {
+      text: 'SELECT * FROM albums WHERE id = $1',
+      values: [id],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new NotFoundError('Album id not found');
+    }
+  }
+
+  async addAlbumLikeById(userId, albumId) {
+    const id = `user-album-like-${nanoid(16)}`;
+    await this.getAlbumById(albumId);
+    const isLikeExist = await this.verifyAlbumLikeAvailability(userId, albumId);
+
+    if (isLikeExist) {
+      throw new ClientError('Album has been liked by user.');
+    }
+
+    const query = {
+      text: 'INSERT INTO user_album_likes(id, user_id, album_id) VALUES($1, $2, $3) RETURNING id',
+      values: [id, userId, albumId],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new InvariantError('Failed to add like to album');
+    }
+
+    await this._cacheService.delete(`likes:album-${albumId}`);
+  }
+
+  async getAlbumLikesById(id) {
+    try {
+      const result = await this._cacheService.get(`likes:album-${id}`);
+      return {
+        likes: JSON.parse(result),
+        source: 'cache',
+      };
+    } catch (error) {
+      const query = {
+        text: 'SELECT COUNT(*)  AS count FROM user_album_likes WHERE album_id = $1',
+        values: [id],
+      };
+
+      const result = await this._pool.query(query);
+
+      const likes = result.rows[0].count;
+
+      await this._cacheService.set(`likes:album-${id}`, JSON.stringify(likes));
+
+      return {
+        likes,
+        source: 'db',
+      };
+    }
+  }
+
+  async deleteAlbumLikeById(userId, albumId) {
+    const query = {
+      text: 'DELETE FROM user_album_likes WHERE user_id = $1 AND album_id = $2 RETURNING id',
+      values: [userId, albumId],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      throw new InvariantError('Failed to delete like');
+    }
+
+    await this._cacheService.delete(`likes:album-${albumId}`);
+  }
+
+  async verifyAlbumLikeAvailability(userId, albumId) {
+    const query = {
+      text: 'SELECT * FROM user_album_likes WHERE user_id = $1 AND album_id = $2',
+      values: [userId, albumId],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rowCount) {
+      return false;
+    }
+
+    return true;
   }
 }
 

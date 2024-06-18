@@ -16,6 +16,8 @@
     "linebreak-style": 0,
     "newline-per-chained-call": "off",
     "camelcase": "off",
-    "no-unused-vars": "off"
+    "no-unused-vars": "off",
+    "function-paren-newline": "off",
+    "radix": "off"
   }
 }
